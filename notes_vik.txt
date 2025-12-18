@@ -1,0 +1,8 @@
+Everytime you build the project, the menuconfig settings reset.
+To keep permanently the configurations made with 
+idf.py menuconfig, save it and exit, AND THEN
+idf.py save-defconfig.
+This will place the genuine modifications you made into a 
+sdkconfig.defaults, that the build process will use as an 
+overlay.
+
