@@ -31,33 +31,74 @@
  * updated. This holds { CapsLock , Shift, Ctrl, Alt, Win, Func, AltGr }.  
  */
 
-/* Keyboard: reports with interrupts changes in the status of the keyboard switches (key_events)
- *           because we have <64, we encode the events as one byte, using the first bit for press-release statutus
- *           and the next 7bit (up to 128 keys) for the switch.
- *           Events with multiple bytes represent several keys pressed and/or depressed in the same scan, even though
- *           this is very unlikely.
- *           After processing the event, the keyboard status is updated (64 bits, 8 contiguous bytes called 'KBD_ROWS' for 
- *           example), and some common modifiers (Lshift,Rshift,Ctrl,AltGr, etc) are also updated in an extra byte 'KBD_MODS'
- *           for masking later. Maybe first bit of KBD_MODS use it for 'keyboard-modified' flag.
- *           Note: Now we dont need to hold the status of the keyboard! But the debouncing algorithm using the 8bit shift 
- *           register I still need it. So, instead of KBD_ROWS being 1 byte per row, I will need one byte per key 
- *           uint8_t KEYS[64] (actually a struct), each one processing the status of the KEY.
- *
- *           Now, map all the keys with printable (or potentially printable character via mods or deadkeys)
- *           With a keyboard status changed (keyboard-modified flag), some special keys (system keys) will already trigger
- *           some processes and flip back the flag, (like bluethooth or things like that, or editor special keymaps).
- *           The second bit of KBD_MODS tells wether the key needs to be processed as a character with further KEYMAP, or 
- *           is a system-KEY (go to menus, change language layout, etc)
- *
- *           KBD MODS register:
- *           KBD_MODS: MSB [ CAPS_LOCK | Shift | ALTGr | FUNC | ALT | CTRL | SYS | keyboard_modified_flag ] LSB
- *           
- *           With the flag still on, a KEYMAP is applied, depending on the keyboard layout loaded (ES, US, NO...), 
- *           processing the modifiers and another byte 'DEAD_KEYS', to finally produce a Character or instruction.
- *
- *           Debate: here, as the whole thing is the editor, instead of mapping characters to the editor normal mode actions,
- *           I could map it here straigth.  
- *           */  
+#define KBD_EVENT_QUEUE_LENGTH 32
+#define KBD_EVENT_SIZE sizeof( uint8_t )
+
+// hold the queue structure.
+StaticQueue_t kbd_QueueBuffer;
+// hold the queue data.
+uint8_t kbd_QueueStorage[ KBD_EVENT_QUEUE_LENGTH * KBD_EVENT_SIZE ];
+
+QueueHandle_t xQueue1;
+// Create a queue capable of containing 10 uint32_t values.
+xQueue1 = xQueueCreateStatic( KBD_EVENT_QUEUE_LENGTH, // The number of items the queue can hold.
+                         KBD_EVENT_SIZE     // The size of each item in the queue
+                         &( kbd_QueueStorage[ 0 ] ), // The buffer that will hold the items in the queue.
+                         &kbd_QueueBuffer ); // The buffer that will hold the queue structure.
+
+
+/* This could be a prototype for the keyboard scan task, showing the queue feature to push key events */
+static void vKeyboardScanTask( void *pvParameters )
+{
+    uint8_t keyevent = ((0x61 << 1) + 1);    // Key 0x61 has ben pressed
+    BaseType_t xReturn; // Used to receive return value
+
+    if (keyChanged) {
+        xReturn = xQueueSend( xQueue1 , (void *)&keyevent , 10);
+        // Determine whether the data is sent successfully through the return value
+        if (xReturn == pdTRUE) {
+            printf("Item Send: %d \n", keyevent);
+        }
+        else {
+            printf("Item Send FALSE\n");
+        }
+        vTaskDelay(1);
+    }
+}
+ 
+
+/* And this could be the processing of the keyboard keys using the keymapping*/
+static void vReceiveTask( void *pvParameters )
+{
+    uint8_t key = 0;   // Used to receive data
+    BaseType_t xReturn; // Used to receive return value
+
+    while (1) {
+        xReturn = xQueueReceive(queue, (void *)&receiver, 10);  //this has to be blocking
+
+        // Determine whether the data is received successfully through the return value
+        if (xReturn == pdTRUE) {
+            printf("Item Receive: %d \n", receiver);
+	    /* Associate the key event with a key through the keymap,
+	     * Then, if it is a modifier, change the modifiers byte, 
+	     * Then, if check what does result from the combination of all modifiers,
+	     * If it results in a system/control, call the respective function.
+	     * If it results in a printable character,
+	     * check if the combination produces another control secquence (either
+	     * in the editor or in any other framework...(editor normal mode, wifi menu...)
+	     * Depending on the status, the printable character is then
+	     * interpreted as unicode to save the text, and simultaneously
+	     * mapped to the font to produce the glyph on display.
+	     */
+        }
+        else {
+            printf("Item Receive FALSE\n");
+        }
+        vTaskDelay(1);
+    }
+}
+
+
 
 
 typewriter V2 matrix (switches):

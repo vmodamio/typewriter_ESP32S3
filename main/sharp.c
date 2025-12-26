@@ -12,13 +12,14 @@
 #include <inttypes.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 #include "esp_system.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
 
-#include "zap-vga16.h"
-#define PSF_HEADER_SIZE 4
+#include "zap-vga16-raw-neg.h"
+#include "keyboard_input.h"
 #define PSF_GLYPH_SIZE 16
 
 /*
@@ -45,9 +46,36 @@
 #define PXWIDTH 320
 #define PXHEIGHT 240
 
+
+#define KEY(r, c) ((r << 3) + c)
+#define CUR( x, y ) (x + y*PXWIDTH/8)  
+
+#define KBD_EVENT_QUEUE_LENGTH 32
+#define KBD_EVENT_SIZE sizeof( uint8_t )
+
+#define SPI_TAG "spi_protocol"
 void displayInit(void);
 void display_write_data(uint8_t addr, uint8_t data);
-#define SPI_TAG "spi_protocol"
+
+
+//// hold the queue structure.
+///configSUPPORT_STATIC_ALLOCATION: Must be enabled in menuconfig?
+StaticQueue_t kbd_StaticQueue;
+uint8_t kbd_QueueStorage[ KBD_EVENT_QUEUE_LENGTH * KBD_EVENT_SIZE ];
+QueueHandle_t keyboard;
+
+
+//StaticQueue_t *keyboard = NULL;
+//keyboard->storage = heap_caps_calloc(1, sizeof(StaticQueue_t) + (KBD_EVENT_QUEUE_LENGTH * KBD_EVENT_SIZE), MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+//if (!keyboard->storage) {
+//    printf("Fail with queue storage");
+//}
+//
+//keyboard->handle = xQueueCreateStatic( KBD_EVENT_QUEUE_LENGTH , KBD_EVENT_SIZE, ((uint8_t*)(keyboard->storage)) + sizeof(StaticQueue_t), (StaticQueue_t*)(keyboard->storage));
+//    if (!keyboard->handle) {
+//        printf("Fail with queue handle");
+//    }
+
 
 typedef enum {
     INSERT_MODE,    
@@ -57,6 +85,8 @@ typedef enum {
 
 spi_device_handle_t spi;
 uint8_t *sharpmem_buffer = NULL;
+
+static uint8_t curx, cury;
 
 void vcom_toggle_task(void *pvParameters) 
 {
@@ -76,6 +106,9 @@ void vcom_toggle_task(void *pvParameters)
 
 void displayInit(void)
 {
+    // Start the VCOM toggling task
+    xTaskCreate(&vcom_toggle_task, "vcom", 2048, NULL, 5, NULL);
+
     esp_err_t ret;
     /* Allocate pixel buffer for SHARP DISP*/
     sharpmem_buffer = (uint8_t *)malloc((PXWIDTH * PXHEIGHT) / 8);
@@ -110,6 +143,9 @@ void displayInit(void)
     ESP_ERROR_CHECK(ret);
     printf("SPI initialized. MOSI:%d CLK:%d CS:%d\n", PIN_NUM_MOSI, PIN_NUM_CLK, PIN_NUM_CS);
     gpio_set_level((gpio_num_t)PIN_NUM_CS, 0);
+
+    // Wait and clear display
+    vTaskDelay(100 / portTICK_PERIOD_MS); 
 }
 
 
@@ -136,14 +172,14 @@ uint8_t getPixel(uint16_t x, uint16_t y) {
 
 void setChar(uint8_t index, uint8_t row, uint8_t col) {
  for (int m =0; m < PSF_GLYPH_SIZE; m++) {
-    sharpmem_buffer[((row * PSF_GLYPH_SIZE +m)*PXWIDTH + 8 * col) / 8] = zap_vga16_psf[ PSF_HEADER_SIZE + index * PSF_GLYPH_SIZE +m];
+    sharpmem_buffer[((row * PSF_GLYPH_SIZE +m)*PXWIDTH + 8 * col) / 8] = zap_vga16_psf[ index * PSF_GLYPH_SIZE +m];
  }
 }
 
 void setCursor(cursor_mode mode, uint8_t row, uint8_t col) {
  for (int m =0; m < PSF_GLYPH_SIZE; m++) {
     uint8_t cursor = sharpmem_buffer[((row * PSF_GLYPH_SIZE +m)*PXWIDTH + 8 * col) / 8]; 
-    if (mode == INSERT_MODE) cursor |= ~zap_vga16_psf[ PSF_HEADER_SIZE + 0xCF * PSF_GLYPH_SIZE +m];
+    if (mode == INSERT_MODE) cursor |= ~zap_vga16_psf[ 0xCF * PSF_GLYPH_SIZE +m];
     else cursor = ~cursor; 
     sharpmem_buffer[((row * PSF_GLYPH_SIZE +m)*PXWIDTH + 8 * col) / 8] = cursor;
  }
@@ -261,46 +297,115 @@ void clearDisplayBuffer() {
   memset(sharpmem_buffer, 0xFF, (PXWIDTH * PXHEIGHT) / 8);
 }
 
+/* This could be a prototype for the keyboard scan task, showing the queue feature to push key events */
+//  static void vKeyboardScanTask( void *pvParameters )
+//  {
+//      uint8_t keyevent = ((0x61 << 1) + 1);    // Key 0x61 has ben pressed
+//      BaseType_t xReturn; // Used to receive return value
+//  
+//      if (keyChanged) {
+//          xReturn = xQueueSend( keyboard , (void *)&keyevent , 10);
+//          // Determine whether the data is sent successfully through the return value
+//          if (xReturn == pdTRUE) {
+//              printf("Item Send: %d \n", keyevent);
+//          }
+//          else {
+//              printf("Item Send FALSE\n");
+//          }
+//          vTaskDelay(1);
+//      }
+//  }
+ 
+/* This could be a prototype for the keyboard scan task, showing the queue feature to push key events */
+static void vKeyboardSimuTask( void *pvParameters )
+{
+
+    uint8_t keyevent[11] = {35+128,  18+128, 38+128, 38+128, 24+128, 53+128, 17+128, 24+128, 19+128, 38+128, 32+128 }; // all keydown events 
+    for (int m=0; m < 11; m++ ){
+        //keyevent++;
+        //if (xQueueSend( keyboard , (void *)&keyevent , portMAX_DELAY) == pdTRUE) {
+        if (xQueueSend( keyboard , &keyevent[ m ] , portMAX_DELAY) == pdTRUE) {
+            printf("Item Send: %d \n", keyevent[ m ]);
+        }
+        else {
+            printf("Item Send FALSE\n");
+        }
+    }
+    vTaskDelete( NULL ); // needs to be called for the task to finish without errors.
+}
+ 
+
+
+/* And this could be the processing of the keyboard keys using the keymapping*/
+static void vProcessKeyTask( void *pvParameters )
+{
+    uint8_t key = 0;   // Used to receive data
+    uint8_t fontchar = 0;
+    while (1) {
+        if (xQueueReceive( keyboard , (void *)&key, portMAX_DELAY) == pdTRUE) {  //this is blocking inf.
+	    bool keydown = (key & KEYDOWN_MASK);
+	    bool modifier = (key & MOD_MASK);
+
+            printf("Item Receive: %d \n", key );
+	    if ( modifier ) {
+		    printf("Key is a modifier \n");
+		    if ( keydown ) KBD_MODS |= (key & KEY_MASK );
+		    else KBD_MODS &= ~(key & KEY_MASK );
+	    }
+	    else if ( keydown ) {
+		    Virtual_Key vk = keymap[ (key & KEY_MASK) ];
+		    if (vk < VKCHAROFFSET) {
+		        printf("Key is a control key (non printable) \n");
+		    }
+		    else {
+		        fontchar = fontmap[vk - VKCHAROFFSET];
+                        setChar(fontchar, cury, curx);
+	                updateLines(PSF_GLYPH_SIZE*cury, PSF_GLYPH_SIZE*(cury+1)-1);
+	                curx++;
+			if (curx > 39) { 
+				curx = 0 ; 
+				cury++;
+				cury = cury %15;
+			}
+		    }
+	    }
+	    /* Associate the key event with a key through the keymap,
+	     * Then, if it is a modifier, change the modifiers byte, 
+	     * Then, if check what does result from the combination of all modifiers,
+	     * If it results in a system/control, call the respective function.
+	     * If it results in a printable character,
+	     * check if the combination produces another control secquence (either
+	     * in the editor or in any other framework...(editor normal mode, wifi menu...)
+	     * Depending on the status, the printable character is then
+	     * interpreted as unicode to save the text, and simultaneously
+	     * mapped to the font to produce the glyph on display.
+	     */
+        }
+        else {
+            printf("Item Receive FALSE\n");
+        }
+        vTaskDelay(1);
+    }
+}
+
+
+
 void app_main(void)
 {
-    // When writing characters from a font, dont need to invert the bits every time. The font can be directly encoded that way.
-    for (int m=0; m < (256 * PSF_GLYPH_SIZE) ; m++) {
-        uint8_t c = 0;
-        for (uint8_t x=0; x < 8; ++x) {
-            c = (c << 1) | (zap_vga16_psf[ PSF_HEADER_SIZE + m] & 1);
-            zap_vga16_psf[ PSF_HEADER_SIZE + m] >>= 1;
-        }
-        zap_vga16_psf[ PSF_HEADER_SIZE + m] = ~c;
-    }
-
-    xTaskCreate(&vcom_toggle_task, "vcom", 2048, NULL, 5, NULL);
+    // Initialize Display
     displayInit();
-    vTaskDelay(100 / portTICK_PERIOD_MS); 
     clearDisplay();
-    for (int m=0; m<80; m++) setPixel(m, 10, 1);
-    for (int m=20; m<100; m++) setPixel(m, 20, 0);
-    for (int m=20; m<100; m++) setPixel(100, m, 0);
 
-    char toprint[12] = {0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x77, 0x6f, 0x72, 0x6c, 0x64, 0x21};
-    char strlength = sizeof(toprint);
-    char curx = 0;
-    char cury = 0;
-    for (int m=0; m < strlength ; m++){
-        setChar(toprint[m], cury, curx);
-	updateLines(PSF_GLYPH_SIZE*cury, PSF_GLYPH_SIZE*(cury+1)-1);
-	curx++;
+    // Start reading the keyboard
+    keyboard = xQueueCreateStatic( KBD_EVENT_QUEUE_LENGTH, // The number of items the queue can hold.
+                         KBD_EVENT_SIZE,      // The size of each item in the queue
+                         &( kbd_QueueStorage[ 0 ] ), // The buffer that will hold the items in the queue.
+                         &kbd_StaticQueue ); // The buffer that will hold the queue structure.
+    xTaskCreate(&vProcessKeyTask, "keyboard", 2048, NULL, 5, NULL);
+    xTaskCreate(&vKeyboardSimuTask, "keysimu", 2048, NULL, 5, NULL);
+    //refreshDisplay();
+    while(1) {
+     vTaskDelay(100); 
     }
-    
-    curx = 39 - strlength +1;
-    cury = 14;
-    for (int m=0; m < strlength ; m++){
-        setChar(toprint[m], cury, curx);
-	updateLines(PSF_GLYPH_SIZE*cury, PSF_GLYPH_SIZE*(cury+1)-1);
-	curx++;
-    }
-    setCursor(1, 0,2);
-    setCursor(0, 0,11);
-
-    refreshDisplay();
 }
 
