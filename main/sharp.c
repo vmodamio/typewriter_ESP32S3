@@ -65,21 +65,9 @@ uint8_t kbd_QueueStorage[ KBD_EVENT_QUEUE_LENGTH * KBD_EVENT_SIZE ];
 QueueHandle_t keyboard;
 
 
-//StaticQueue_t *keyboard = NULL;
-//keyboard->storage = heap_caps_calloc(1, sizeof(StaticQueue_t) + (KBD_EVENT_QUEUE_LENGTH * KBD_EVENT_SIZE), MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
-//if (!keyboard->storage) {
-//    printf("Fail with queue storage");
-//}
-//
-//keyboard->handle = xQueueCreateStatic( KBD_EVENT_QUEUE_LENGTH , KBD_EVENT_SIZE, ((uint8_t*)(keyboard->storage)) + sizeof(StaticQueue_t), (StaticQueue_t*)(keyboard->storage));
-//    if (!keyboard->handle) {
-//        printf("Fail with queue handle");
-//    }
-
 spi_device_handle_t spi;
 DMA_ATTR uint8_t *sharpmem_buffer = NULL;
 
-//uint8_t curx, cury;
 typedef struct {
     enum Mode {
 	HIDDEN,
@@ -174,21 +162,6 @@ uint8_t getPixel(uint16_t x, uint16_t y) {
   return sharpmem_buffer[(y * PXWIDTH + x) / 8] & set[x & 7] ? 1 : 0;
 }
 
-void setChar(uint8_t index, uint8_t row, uint8_t col) {
- for (int m =0; m < PSF_GLYPH_SIZE; m++) {
-    sharpmem_buffer[((row * PSF_GLYPH_SIZE +m)*PXWIDTH + 8 * col) / 8] = zap_vga16_psf[ index * PSF_GLYPH_SIZE +m];
- }
-}
-
-//void setCursor(cursor_mode mode, uint8_t row, uint8_t col) {
-// for (int m =0; m < PSF_GLYPH_SIZE; m++) {
-//    uint8_t cursor = sharpmem_buffer[((row * PSF_GLYPH_SIZE +m)*PXWIDTH + 8 * col) / 8]; 
-//    if (mode == INSERT_MODE) cursor |= ~zap_vga16_psf[ 0xCF * PSF_GLYPH_SIZE +m];
-//    else cursor = ~cursor; 
-//    sharpmem_buffer[((row * PSF_GLYPH_SIZE +m)*PXWIDTH + 8 * col) / 8] = cursor;
-// }
-//}
-
 void clearDisplay() {
   memset(sharpmem_buffer, 0xff, (PXWIDTH * PXHEIGHT) / 8);
   gpio_set_level((gpio_num_t)PIN_NUM_CS, 1);
@@ -259,7 +232,7 @@ void updateRow(uint8_t row) {
   memset(&t, 0, sizeof(t));       //Zero out the transaction
 
   gpio_set_level((gpio_num_t)PIN_NUM_CS, 1);
-  esp_rom_delay_us(2);
+  esp_rom_delay_us(1);
   uint8_t write_data[1] = {(uint8_t)SHARPMEM_BIT_WRITECMD};
   t.length = sizeof(write_data)*8;                  //Each data byte is 8 bits
   t.tx_buffer = write_data;
@@ -286,7 +259,7 @@ void updateRow(uint8_t row) {
   t.tx_buffer = last_line;
   ret = spi_device_transmit(spi, &t); // spi_device_polling_transmit
   gpio_set_level((gpio_num_t)PIN_NUM_CS, 0);
-  esp_rom_delay_us(2);
+  esp_rom_delay_us(1);
 
   assert(ret==ESP_OK);
   }
@@ -347,17 +320,14 @@ static void vKeyboardSimuTask( void *pvParameters )
 /* And this could be the processing of the keyboard keys using the keymapping*/
 static void vProcessKeyTask( void *pvParameters )
 {
-    uint8_t key = 0;   // Used to receive data
+    uint8_t key = 0;   // received key-event data
     uint8_t fontchar = 0;
     Cursor_t *cur = (Cursor_t *) pvParameters;
-    //curx = 0;
-    //cury = 0;
     while (1) {
         if (xQueueReceive( keyboard , (void *)&key, portMAX_DELAY) == pdTRUE) {  //this is blocking inf.
 	    bool keydown = (key & KEYDOWN_MASK);
 	    bool modifier = (key & MOD_MASK);
 
-            printf("Item Receive: %d \n", key );
 	    if ( modifier ) {
 		    printf("Key is a modifier \n");
 		    if ( keydown ) KBD_MODS |= (key & KEY_MASK );
@@ -411,11 +381,10 @@ void app_main(void)
     displayInit();
     clearDisplay();
 
-    static Cursor_t cursor;
+    static Cursor_t cursor; // initializes to position (0,0)
     cursor.mode = NORMAL;
     Cursor_t *cur = &cursor;
     //cur->x = 0;
-    //cur->y = 2;
     
     // Start reading the keyboard
     keyboard = xQueueCreateStatic( KBD_EVENT_QUEUE_LENGTH, // The number of items the queue can hold.
@@ -423,12 +392,9 @@ void app_main(void)
                          &( kbd_QueueStorage[ 0 ] ), // The buffer that will hold the items in the queue.
                          &kbd_StaticQueue ); // The buffer that will hold the queue structure.
     xTaskCreate(vProcessKeyTask, "keyboard", 2048, (void *) cur, 5, NULL);
-    //xTaskCreate(&vProcessKeyTask, "keyboard", 2048, NULL, 5, NULL);
     xTaskCreate(vKeyboardSimuTask, "keysimu", 2048, NULL, 5, NULL);
-    //refreshDisplay();
     while(1) {
-     vTaskDelay(100); 
-    //refreshDisplay();
+     vTaskDelay(pdMS_TO_TICKS(10000)); 
     }
 }
 

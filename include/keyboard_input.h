@@ -12,21 +12,24 @@
 
 /* *  Keyboard modifier events are send as: 
  *
- *  MODIFIER EVENTS = MSB [ EVENT |  1  |  RIGHT  | RALT | LALT | CMD | LCTRL | LSHIFT ] LSB
+ *  MODIFIER EVENTS = MSB [ EVENT |  1  |  RIGHT  | CAPS | LALT | LCMD | LCTRL | LSHIFT ] LSB
  *
  *  And the key code for those modifiers would be, including the extra (1 << 6):
- *  LSHIFT = 64 + 0      = 64
+ *  LSHIFT = 64 + 1      = 65
  *  LCTRL  = 64 + 2      = 66 
- *  CMD    = 64 + 4      = 68
+ *  LCMD   = 64 + 4      = 68
  *  LALT   = 64 + 8      = 72
- *  RALT   = 64 + 16     = 80
- *  RSHIFT = 64 + 0 + 32 = 96
+ *  RALT   = 64 + 8 + 32 = 104
+ *  RSHIFT = 64 + 1 + 32 = 97
  *  RCTRL  = 64 + 2 + 32 = 98 
  *
- *  The LEFT and RIGHT ALT KEYS are treated differently (Right is like AltGr), but the CTRL and SHIFT
+ *  The KEYS LEFT RIGHT are treated differently (like RALT is AltGr), but the CTRL and SHIFT
  *  keys are doubled in the keyboard. To avoid problems the modifier bit refers to the LEFT version,
  *  while the right version of the same key is mapped setting the 5th bit (right), in order to avoid 
  *  having the same key in multiple states.
+ *
+ *  The CAPSLOCK (bit 5) is not produced by a modifier-key event (or maybe I should include it here), but
+ *  the bit in the KBD_MODS is toggled with the key pressed.
  *  
  *  There are two extra special keys: LANG and SYS. Neither is a modifier.
  *  LANG is a deadkey: Pressing LANG + {e, u, i, n} changes the keyboard layout to Spanish, 
@@ -52,9 +55,9 @@ static const uint8_t KBDMAP[] =  {  1 ,  3 ,  5 ,  7 ,  8 , 10 , 12 , 14 ,
                                    15 , 17 , 19 , 21 , 22 , 24 , 25 , 27 , 
                                    16 , 18 , 33 , 35 , 23 , 38 , 26 , 28 , 
                                    29 , 31 , 32 , 34 , 36 , 37 , 39 , 41 , 
-                                   30 , 42 , 44 , 46 , 48 , 50 , 40 , 96 , 
-                                   64 , 43 , 45 , 47 , 49 , 51 , 52 ,  0 , 
-                                   66 , 68 , 72 , 53 , 80 , 54 , 55 , 98 };
+                                   30 , 42 , 44 , 46 , 48 , 50 , 40 , 97 , 
+                                   65 , 43 , 45 , 47 , 49 , 51 , 52 ,  0 , 
+                                   66 , 68 , 72 , 53 ,104 , 54 , 55 , 98 };
  
 
 #define VKCHAROFFSET 28   /* Offset between the key definitions and the character font/encoding arrays */
@@ -384,4 +387,13 @@ static int keymap[] =  { VK_NONE,  // 0
 	VK_TAB, VK_q, VK_w, VK_e, VK_r, VK_t, VK_y, VK_u, VK_i, VK_o, VK_p, VK_LEFTBRACKET, VK_RIGHTBRACKET, VK_ENTER,  // 28 
 	VK_CAPSLOCK, VK_a, VK_s, VK_d, VK_f, VK_g, VK_h, VK_j, VK_k, VK_l, VK_SEMICOLON, VK_APOSTROPHE, VK_BACKSLASH,  // 41
 	          VK_LESS, VK_z, VK_x, VK_c, VK_v, VK_b, VK_n, VK_m, VK_COMMA, VK_DOT, VK_SLASH,  // 52
+	          VK_SPACE, VK_SYS, VK_LANG }; // 55
+
+static int keymap_shift[] =  { VK_NONE,  // 0
+	VK_TILDE, VK_EXCLAIM, VK_AT, VK_HASH, VK_DOLLAR, 
+	VK_PERCENT, VK_CARET, VK_AMPERSAND, VK_ASTERISK, VK_LEFTPAREN, 
+	VK_RIGHTPAREN, VK_UNDERSCORE, VK_PLUS, VK_BACKSPACE,  // 14
+	VK_TAB, VK_Q, VK_W, VK_E, VK_R, VK_T, VK_Y, VK_U, VK_I, VK_O, VK_P, VK_LEFTBRACE, VK_RIGHTBRACE, VK_ENTER,  // 28 
+	VK_CAPSLOCK, VK_A, VK_S, VK_D, VK_F, VK_G, VK_H, VK_J, VK_K, VK_L, VK_COLON, VK_QUOTEDBL, VK_VERTICALBAR,  // 41
+	          VK_LESS, VK_Z, VK_X, VK_C, VK_V, VK_B, VK_N, VK_M, VK_LESS, VK_GREATER, VK_QUESTION,  // 52
 	          VK_SPACE, VK_SYS, VK_LANG }; // 55
