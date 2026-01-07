@@ -76,17 +76,21 @@ QueueHandle_t keyboard;
 //        printf("Fail with queue handle");
 //    }
 
-
-typedef enum {
-    INSERT_MODE,    
-    REPLACE_MODE,
-    NORMAL_MODE
-} cursor_mode;
-
 spi_device_handle_t spi;
-uint8_t *sharpmem_buffer = NULL;
+DMA_ATTR uint8_t *sharpmem_buffer = NULL;
 
-static uint8_t curx, cury;
+//uint8_t curx, cury;
+typedef struct {
+    enum Mode {
+	HIDDEN,
+        NORMAL,
+	INSERT,
+	REPLACE
+    } mode;
+    uint8_t x;
+    uint8_t y;
+} Cursor_t;
+
 
 void vcom_toggle_task(void *pvParameters) 
 {
@@ -176,14 +180,14 @@ void setChar(uint8_t index, uint8_t row, uint8_t col) {
  }
 }
 
-void setCursor(cursor_mode mode, uint8_t row, uint8_t col) {
- for (int m =0; m < PSF_GLYPH_SIZE; m++) {
-    uint8_t cursor = sharpmem_buffer[((row * PSF_GLYPH_SIZE +m)*PXWIDTH + 8 * col) / 8]; 
-    if (mode == INSERT_MODE) cursor |= ~zap_vga16_psf[ 0xCF * PSF_GLYPH_SIZE +m];
-    else cursor = ~cursor; 
-    sharpmem_buffer[((row * PSF_GLYPH_SIZE +m)*PXWIDTH + 8 * col) / 8] = cursor;
- }
-}
+//void setCursor(cursor_mode mode, uint8_t row, uint8_t col) {
+// for (int m =0; m < PSF_GLYPH_SIZE; m++) {
+//    uint8_t cursor = sharpmem_buffer[((row * PSF_GLYPH_SIZE +m)*PXWIDTH + 8 * col) / 8]; 
+//    if (mode == INSERT_MODE) cursor |= ~zap_vga16_psf[ 0xCF * PSF_GLYPH_SIZE +m];
+//    else cursor = ~cursor; 
+//    sharpmem_buffer[((row * PSF_GLYPH_SIZE +m)*PXWIDTH + 8 * col) / 8] = cursor;
+// }
+//}
 
 void clearDisplay() {
   memset(sharpmem_buffer, 0xff, (PXWIDTH * PXHEIGHT) / 8);
@@ -247,32 +251,27 @@ void refreshDisplay(void) {
   assert(ret==ESP_OK);
   }
 
-void updateLines(uint8_t from, uint8_t to) {
-  uint16_t i, currentline;
+void updateRow(uint8_t row) {
+  uint8_t i;
 
   esp_err_t ret;
   spi_transaction_t t;
   memset(&t, 0, sizeof(t));       //Zero out the transaction
 
   gpio_set_level((gpio_num_t)PIN_NUM_CS, 1);
-  esp_rom_delay_us(6);
+  esp_rom_delay_us(2);
   uint8_t write_data[1] = {(uint8_t)SHARPMEM_BIT_WRITECMD};
   t.length = sizeof(write_data)*8;                  //Each data byte is 8 bits
   t.tx_buffer = write_data;
   ret = spi_device_transmit(spi, &t);
 
   uint8_t bytes_per_line = PXWIDTH / 8;
-  uint16_t totalbytes = (PXWIDTH * (to - from +1)) / 8;
+  uint8_t line[bytes_per_line + 2];
+  line[0] = (uint8_t)(PSF_GLYPH_SIZE * row);
 
-  for (i = from; i < totalbytes; i += bytes_per_line) {
-    uint8_t line[bytes_per_line + 2];
-
-    // Send address byte
-    currentline = ((i + 1) / (PXWIDTH / 8)) + 1;
-    line[0] = currentline;
-    // copy over this line
-    memcpy(line + 1, sharpmem_buffer + i, bytes_per_line);
-    // Send end of line
+  for (i = 0; i < PSF_GLYPH_SIZE; i++) {
+    memcpy(line + 1, sharpmem_buffer + line[0]*bytes_per_line, bytes_per_line);
+    line[0]++;
     line[bytes_per_line + 1] = 0x00;
 
     t.length = (bytes_per_line+2) *8; // bytes_per_line+2
@@ -291,6 +290,14 @@ void updateLines(uint8_t from, uint8_t to) {
 
   assert(ret==ESP_OK);
   }
+
+
+void displayChar(uint8_t index, Cursor_t *cur) {
+    for (int m =0; m < PSF_GLYPH_SIZE; m++) {
+       sharpmem_buffer[(( (cur->y) * PSF_GLYPH_SIZE +m)*PXWIDTH + 8 * (cur->x)) / 8] = zap_vga16_psf[ index * PSF_GLYPH_SIZE +m];
+    }
+    updateRow(cur->y);
+}
 
 
 void clearDisplayBuffer() {
@@ -321,6 +328,7 @@ static void vKeyboardSimuTask( void *pvParameters )
 {
 
     uint8_t keyevent[11] = {35+128,  18+128, 38+128, 38+128, 24+128, 53+128, 17+128, 24+128, 19+128, 38+128, 32+128 }; // all keydown events 
+    for (int i=0; i<10; i++) {
     for (int m=0; m < 11; m++ ){
         //keyevent++;
         //if (xQueueSend( keyboard , (void *)&keyevent , portMAX_DELAY) == pdTRUE) {
@@ -330,7 +338,7 @@ static void vKeyboardSimuTask( void *pvParameters )
         else {
             printf("Item Send FALSE\n");
         }
-    }
+    }}
     vTaskDelete( NULL ); // needs to be called for the task to finish without errors.
 }
  
@@ -341,6 +349,9 @@ static void vProcessKeyTask( void *pvParameters )
 {
     uint8_t key = 0;   // Used to receive data
     uint8_t fontchar = 0;
+    Cursor_t *cur = (Cursor_t *) pvParameters;
+    //curx = 0;
+    //cury = 0;
     while (1) {
         if (xQueueReceive( keyboard , (void *)&key, portMAX_DELAY) == pdTRUE) {  //this is blocking inf.
 	    bool keydown = (key & KEYDOWN_MASK);
@@ -359,14 +370,19 @@ static void vProcessKeyTask( void *pvParameters )
 		    }
 		    else {
 		        fontchar = fontmap[vk - VKCHAROFFSET];
-                        setChar(fontchar, cury, curx);
-	                updateLines(PSF_GLYPH_SIZE*cury, PSF_GLYPH_SIZE*(cury+1)-1);
-	                curx++;
-			if (curx > 39) { 
-				curx = 0 ; 
-				cury++;
-				cury = cury %15;
+                        displayChar(fontchar, cur);
+			cur->x++;
+			if (cur->x == 40) {
+			    cur->y++;
+			    cur->x = 0;
+			    if (cur->y == 14) cur->y = 0;
 			}
+	                //curx++;
+			//if (curx > 39) { 
+			//	curx = 0 ; 
+			//	cury++;
+			//	cury = cury %15;
+			//}
 		    }
 	    }
 	    /* Associate the key event with a key through the keymap,
@@ -389,23 +405,30 @@ static void vProcessKeyTask( void *pvParameters )
 }
 
 
-
 void app_main(void)
 {
     // Initialize Display
     displayInit();
     clearDisplay();
 
+    static Cursor_t cursor;
+    cursor.mode = NORMAL;
+    Cursor_t *cur = &cursor;
+    //cur->x = 0;
+    //cur->y = 2;
+    
     // Start reading the keyboard
     keyboard = xQueueCreateStatic( KBD_EVENT_QUEUE_LENGTH, // The number of items the queue can hold.
                          KBD_EVENT_SIZE,      // The size of each item in the queue
                          &( kbd_QueueStorage[ 0 ] ), // The buffer that will hold the items in the queue.
                          &kbd_StaticQueue ); // The buffer that will hold the queue structure.
-    xTaskCreate(&vProcessKeyTask, "keyboard", 2048, NULL, 5, NULL);
-    xTaskCreate(&vKeyboardSimuTask, "keysimu", 2048, NULL, 5, NULL);
+    xTaskCreate(vProcessKeyTask, "keyboard", 2048, (void *) cur, 5, NULL);
+    //xTaskCreate(&vProcessKeyTask, "keyboard", 2048, NULL, 5, NULL);
+    xTaskCreate(vKeyboardSimuTask, "keysimu", 2048, NULL, 5, NULL);
     //refreshDisplay();
     while(1) {
      vTaskDelay(100); 
+    //refreshDisplay();
     }
 }
 
